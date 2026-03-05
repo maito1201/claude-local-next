@@ -77,35 +77,37 @@ describe("useSpeechRecognition", () => {
     expect(result.current.isSupported).toBe(false);
   });
 
-  test("should call recognition.start when start is called", () => {
+  test("should call recognition.start when enableVoiceMode is called", () => {
     const onResult = jest.fn();
     const { result } = renderHook(() =>
       useSpeechRecognition({ onResult })
     );
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     expect(mockRecognition.start).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceMode).toBe(true);
     expect(result.current.isListening).toBe(true);
   });
 
-  test("should call recognition.stop and reset state when stop is called", () => {
+  test("should call recognition.stop and reset state when disableVoiceMode is called", () => {
     const onResult = jest.fn();
     const { result } = renderHook(() =>
       useSpeechRecognition({ onResult })
     );
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     act(() => {
-      result.current.stop();
+      result.current.disableVoiceMode();
     });
 
     expect(mockRecognition.stop).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceMode).toBe(false);
     expect(result.current.isListening).toBe(false);
     expect(result.current.transcript).toBe("");
   });
@@ -117,7 +119,7 @@ describe("useSpeechRecognition", () => {
     );
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     act(() => {
@@ -139,7 +141,7 @@ describe("useSpeechRecognition", () => {
     );
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     act(() => {
@@ -167,7 +169,7 @@ describe("useSpeechRecognition", () => {
     );
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     // First final result
@@ -213,103 +215,245 @@ describe("useSpeechRecognition", () => {
     expect(onResult).toHaveBeenCalledWith("hello world");
   });
 
-  test("should auto-restart recognition on onend when isListening is true", () => {
+  test("should set isListening to false on onend without restarting", () => {
     const onResult = jest.fn();
     const { result } = renderHook(() =>
       useSpeechRecognition({ onResult })
     );
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
-    expect(mockRecognition.start).toHaveBeenCalledTimes(1);
+    expect(result.current.isListening).toBe(true);
+    mockRecognition.start.mockClear();
 
     act(() => {
       mockRecognition.onend!();
-      jest.advanceTimersByTime(300);
     });
 
-    expect(mockRecognition.start).toHaveBeenCalledTimes(2);
+    expect(result.current.isListening).toBe(false);
+    // voiceMode remains true
+    expect(result.current.voiceMode).toBe(true);
+    // No immediate restart attempt from onend
+    expect(mockRecognition.start).not.toHaveBeenCalled();
   });
 
-  test("should retry with increasing delay when start throws on restart", () => {
+  test("should restart recognition via polling when voiceMode is on and recognition stopped", () => {
     const onResult = jest.fn();
     const { result } = renderHook(() =>
       useSpeechRecognition({ onResult })
     );
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
+    mockRecognition.start.mockClear();
+
+    // Simulate recognition stopping
+    act(() => {
+      mockRecognition.onend!();
+    });
+
+    expect(result.current.isListening).toBe(false);
+    expect(result.current.voiceMode).toBe(true);
+
+    // Advance to next poll interval (3 seconds)
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(mockRecognition.start).toHaveBeenCalledTimes(1);
+    expect(result.current.isListening).toBe(true);
+  });
+
+  test("should not restart via polling when voiceMode is off", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    act(() => {
+      result.current.enableVoiceMode();
+    });
+
+    act(() => {
+      result.current.disableVoiceMode();
+    });
+
+    mockRecognition.start.mockClear();
+
+    // Advance past poll interval
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(mockRecognition.start).not.toHaveBeenCalled();
+  });
+
+  test("should not restart via polling when suspended", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    act(() => {
+      result.current.enableVoiceMode();
+    });
+
+    act(() => {
+      result.current.suspend();
+    });
+
+    expect(result.current.voiceMode).toBe(true);
+    expect(result.current.isListening).toBe(false);
+
+    mockRecognition.start.mockClear();
+
+    // Advance past poll interval
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(mockRecognition.start).not.toHaveBeenCalled();
+  });
+
+  test("should restart recognition when resume is called while voiceMode is on", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    act(() => {
+      result.current.enableVoiceMode();
+    });
+
+    act(() => {
+      result.current.suspend();
+    });
+
+    mockRecognition.start.mockClear();
+
+    act(() => {
+      result.current.resume();
+    });
+
+    expect(mockRecognition.start).toHaveBeenCalledTimes(1);
+    expect(result.current.isListening).toBe(true);
+  });
+
+  test("should not restart recognition when resume is called while voiceMode is off", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    // Never enabled voiceMode
+    mockRecognition.start.mockClear();
+
+    act(() => {
+      result.current.resume();
+    });
+
+    expect(mockRecognition.start).not.toHaveBeenCalled();
+  });
+
+  test("should keep voiceMode true after onerror and restart via polling", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    act(() => {
+      result.current.enableVoiceMode();
+    });
+
+    act(() => {
+      mockRecognition.onerror!({ error: "audio-capture", message: "No mic" });
+    });
+
+    expect(result.current.isListening).toBe(false);
+    expect(result.current.error).toBe("audio-capture");
+    // voiceMode stays true - polling will retry
+    expect(result.current.voiceMode).toBe(true);
+
+    mockRecognition.start.mockClear();
+
+    // Polling should restart
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(mockRecognition.start).toHaveBeenCalledTimes(1);
+    expect(result.current.isListening).toBe(true);
+    expect(result.current.error).toBe("");
+  });
+
+  test("should handle polling restart failure gracefully and retry on next interval", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    act(() => {
+      result.current.enableVoiceMode();
+    });
+
+    // Simulate recognition stopping
+    act(() => {
+      mockRecognition.onend!();
+    });
+
+    // Make start throw on first poll
     mockRecognition.start
       .mockImplementationOnce(() => { throw new Error("not ready"); })
       .mockImplementationOnce(() => {});
 
     mockRecognition.start.mockClear();
 
+    // First poll - should fail silently
     act(() => {
-      mockRecognition.onend!();
-      jest.advanceTimersByTime(300);
+      jest.advanceTimersByTime(3000);
     });
 
     expect(mockRecognition.start).toHaveBeenCalledTimes(1);
-    expect(result.current.isListening).toBe(true);
+    expect(result.current.isListening).toBe(false);
 
+    // Second poll - should succeed
     act(() => {
-      jest.advanceTimersByTime(200);
+      jest.advanceTimersByTime(3000);
     });
 
     expect(mockRecognition.start).toHaveBeenCalledTimes(2);
     expect(result.current.isListening).toBe(true);
   });
 
-  test("should give up and set error after 5 failed restart attempts", () => {
+  test("should not restart recognition on onend when disableVoiceMode was called", () => {
     const onResult = jest.fn();
     const { result } = renderHook(() =>
       useSpeechRecognition({ onResult })
     );
 
     act(() => {
-      result.current.start();
-    });
-
-    mockRecognition.start.mockImplementation(() => { throw new Error("fail"); });
-    mockRecognition.start.mockClear();
-
-    act(() => {
-      mockRecognition.onend!();
-      jest.advanceTimersByTime(300);
-    });
-
-    // Advance through all 5 retries: 200, 400, 600, 800, 1000
-    act(() => {
-      jest.advanceTimersByTime(200 + 400 + 600 + 800 + 1000);
-    });
-
-    expect(result.current.isListening).toBe(false);
-    expect(result.current.error).toBe("restart-failed");
-  });
-
-  test("should not restart recognition on onend when stopped", () => {
-    const onResult = jest.fn();
-    const { result } = renderHook(() =>
-      useSpeechRecognition({ onResult })
-    );
-
-    act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     act(() => {
-      result.current.stop();
+      result.current.disableVoiceMode();
     });
 
     mockRecognition.start.mockClear();
 
     act(() => {
       mockRecognition.onend!();
+    });
+
+    expect(mockRecognition.start).not.toHaveBeenCalled();
+
+    // Also no polling restart
+    act(() => {
+      jest.advanceTimersByTime(3000);
     });
 
     expect(mockRecognition.start).not.toHaveBeenCalled();
@@ -331,7 +475,7 @@ describe("useSpeechRecognition", () => {
     );
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     act(() => {
@@ -343,37 +487,14 @@ describe("useSpeechRecognition", () => {
     expect(result.current.transcript).toBe("");
   });
 
-  test("should not restart recognition on onend after onerror", () => {
+  test("should clear error when enableVoiceMode is called again", () => {
     const onResult = jest.fn();
     const { result } = renderHook(() =>
       useSpeechRecognition({ onResult })
     );
 
     act(() => {
-      result.current.start();
-    });
-
-    act(() => {
-      mockRecognition.onerror!({ error: "not-allowed", message: "Permission denied" });
-    });
-
-    mockRecognition.start.mockClear();
-
-    act(() => {
-      mockRecognition.onend!();
-    });
-
-    expect(mockRecognition.start).not.toHaveBeenCalled();
-  });
-
-  test("should clear error when start is called again", () => {
-    const onResult = jest.fn();
-    const { result } = renderHook(() =>
-      useSpeechRecognition({ onResult })
-    );
-
-    act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     act(() => {
@@ -383,9 +504,106 @@ describe("useSpeechRecognition", () => {
     expect(result.current.error).toBe("audio-capture");
 
     act(() => {
-      result.current.start();
+      result.current.enableVoiceMode();
     });
 
     expect(result.current.error).toBe("");
+  });
+
+  test("should stop polling when voiceMode is disabled", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    act(() => {
+      result.current.enableVoiceMode();
+    });
+
+    // Simulate recognition stopping
+    act(() => {
+      mockRecognition.onend!();
+    });
+
+    // Disable voice mode before poll fires
+    act(() => {
+      result.current.disableVoiceMode();
+    });
+
+    mockRecognition.start.mockClear();
+
+    // Advance past poll interval
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(mockRecognition.start).not.toHaveBeenCalled();
+  });
+
+  test("suspend should stop recognition and prevent polling restart", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    act(() => {
+      result.current.enableVoiceMode();
+    });
+
+    expect(result.current.isListening).toBe(true);
+
+    act(() => {
+      result.current.suspend();
+    });
+
+    expect(mockRecognition.stop).toHaveBeenCalled();
+    expect(result.current.isListening).toBe(false);
+    expect(result.current.voiceMode).toBe(true);
+
+    mockRecognition.start.mockClear();
+
+    // Polling should not restart while suspended
+    act(() => {
+      jest.advanceTimersByTime(6000);
+    });
+
+    expect(mockRecognition.start).not.toHaveBeenCalled();
+  });
+
+  test("resume after suspend should restart and allow polling", () => {
+    const onResult = jest.fn();
+    const { result } = renderHook(() =>
+      useSpeechRecognition({ onResult })
+    );
+
+    act(() => {
+      result.current.enableVoiceMode();
+    });
+
+    act(() => {
+      result.current.suspend();
+    });
+
+    mockRecognition.start.mockClear();
+
+    act(() => {
+      result.current.resume();
+    });
+
+    expect(mockRecognition.start).toHaveBeenCalledTimes(1);
+    expect(result.current.isListening).toBe(true);
+
+    // If recognition stops again, polling should restart
+    act(() => {
+      mockRecognition.onend!();
+    });
+
+    mockRecognition.start.mockClear();
+
+    act(() => {
+      jest.advanceTimersByTime(3000);
+    });
+
+    expect(mockRecognition.start).toHaveBeenCalledTimes(1);
   });
 });

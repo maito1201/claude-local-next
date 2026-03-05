@@ -4,7 +4,7 @@ import { MessageInput } from "../MessageInput";
 
 function renderMessageInput(overrides: {
   onSend?: jest.Mock;
-  isListening?: boolean;
+  voiceMode?: boolean;
   onToggleVoiceMode?: jest.Mock;
   isVoiceSupported?: boolean;
   transcript?: string;
@@ -16,7 +16,7 @@ function renderMessageInput(overrides: {
 } = {}) {
   const props = {
     onSend: overrides.onSend ?? jest.fn(),
-    isListening: overrides.isListening ?? false,
+    voiceMode: overrides.voiceMode ?? false,
     onToggleVoiceMode: overrides.onToggleVoiceMode ?? jest.fn(),
     isVoiceSupported: overrides.isVoiceSupported ?? false,
     transcript: overrides.transcript ?? "",
@@ -132,18 +132,18 @@ describe("MessageInput", () => {
     expect(onToggleVoiceMode).toHaveBeenCalledTimes(1);
   });
 
-  test("should show stop label when isListening is true", () => {
-    renderMessageInput({ isVoiceSupported: true, isListening: true });
+  test("should show stop label when voiceMode is true", () => {
+    renderMessageInput({ isVoiceSupported: true, voiceMode: true });
 
     expect(
       screen.getByRole("button", { name: "音声入力を停止" })
     ).toBeInTheDocument();
   });
 
-  test("should display transcript in textarea when isListening is on", () => {
+  test("should display transcript in textarea when voiceMode is on", () => {
     renderMessageInput({
       isVoiceSupported: true,
-      isListening: true,
+      voiceMode: true,
       transcript: "音声テキスト",
     });
 

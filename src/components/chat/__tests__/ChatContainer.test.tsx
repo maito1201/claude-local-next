@@ -3,17 +3,23 @@ import userEvent from "@testing-library/user-event";
 import { ChatContainer } from "../ChatContainer";
 import { DEFAULT_TTS_SETTINGS } from "@/types/tts-settings";
 
-const mockStart = jest.fn();
-const mockStop = jest.fn();
+const mockEnableVoiceMode = jest.fn();
+const mockDisableVoiceMode = jest.fn();
+const mockSuspend = jest.fn();
+const mockResume = jest.fn();
 let mockIsSupported = true;
+let mockVoiceMode = false;
 let capturedOnResult: ((text: string) => void) | null = null;
 
 jest.mock("@/hooks/useSpeechRecognition", () => ({
   useSpeechRecognition: ({ onResult }: { onResult: (text: string) => void }) => {
     capturedOnResult = onResult;
     return {
-      start: mockStart,
-      stop: mockStop,
+      enableVoiceMode: mockEnableVoiceMode,
+      disableVoiceMode: mockDisableVoiceMode,
+      suspend: mockSuspend,
+      resume: mockResume,
+      voiceMode: mockVoiceMode,
       isListening: false,
       isSupported: mockIsSupported,
       transcript: "",
@@ -90,12 +96,15 @@ describe("ChatContainer", () => {
   beforeEach(() => {
     mockFetch = jest.fn();
     globalThis.fetch = mockFetch;
-    mockStart.mockClear();
-    mockStop.mockClear();
+    mockEnableVoiceMode.mockClear();
+    mockDisableVoiceMode.mockClear();
+    mockSuspend.mockClear();
+    mockResume.mockClear();
     mockSpeak.mockClear();
     mockStopTts.mockClear();
     mockIsSupported = true;
     mockIsTtsSupported = true;
+    mockVoiceMode = false;
     capturedOnResult = null;
     capturedOnEnd = null;
   });
@@ -279,7 +288,7 @@ describe("ChatContainer", () => {
     ).toBeInTheDocument();
   });
 
-  test("should toggle voice mode on button click", async () => {
+  test("should call enableVoiceMode on button click", async () => {
     const user = userEvent.setup();
     mockIsSupported = true;
     render(<ChatContainer />);
@@ -288,10 +297,10 @@ describe("ChatContainer", () => {
       screen.getByRole("button", { name: "音声入力を開始" })
     );
 
-    expect(mockStart).toHaveBeenCalledTimes(1);
+    expect(mockEnableVoiceMode).toHaveBeenCalledTimes(1);
   });
 
-  test("should call stop on voice when sending message", async () => {
+  test("should call suspend on voice when sending message", async () => {
     mockIsSupported = true;
 
     mockFetch.mockResolvedValue(
@@ -305,7 +314,7 @@ describe("ChatContainer", () => {
     });
 
     await waitFor(() => {
-      expect(mockStop).toHaveBeenCalled();
+      expect(mockSuspend).toHaveBeenCalled();
     });
 
     await waitFor(() => {
@@ -313,9 +322,9 @@ describe("ChatContainer", () => {
     });
   });
 
-  test("should restart voice after response when voice mode is on", async () => {
-    const user = userEvent.setup();
+  test("should call resume after response when voice mode is on", async () => {
     mockIsSupported = true;
+    mockVoiceMode = true;
 
     mockFetch.mockResolvedValue(
       createMockResponse(['data: {"type":"result"}\n\n'])
@@ -323,26 +332,23 @@ describe("ChatContainer", () => {
 
     render(<ChatContainer />);
 
-    await user.click(
-      screen.getByRole("button", { name: "音声入力を開始" })
-    );
-
-    expect(mockStart).toHaveBeenCalledTimes(1);
-    mockStart.mockClear();
-    mockStop.mockClear();
+    mockSuspend.mockClear();
+    mockResume.mockClear();
 
     await act(async () => {
       capturedOnResult!("voice text");
     });
 
     await waitFor(() => {
-      expect(mockStart).toHaveBeenCalledTimes(1);
+      expect(mockSuspend).toHaveBeenCalled();
+      expect(mockResume).toHaveBeenCalled();
     });
   });
 
-  test("should not restart voice after AbortError", async () => {
+  test("should not call resume after AbortError", async () => {
     const user = userEvent.setup();
     mockIsSupported = true;
+    mockVoiceMode = true;
 
     mockFetch.mockImplementationOnce(
       (_url: string, init: RequestInit) => {
@@ -362,14 +368,11 @@ describe("ChatContainer", () => {
 
     render(<ChatContainer />);
 
-    await user.click(
-      screen.getByRole("button", { name: "音声入力を開始" })
-    );
-    mockStart.mockClear();
-
     await act(async () => {
       capturedOnResult!("first");
     });
+
+    mockResume.mockClear();
 
     await act(async () => {
       capturedOnResult!("second");
@@ -379,7 +382,8 @@ describe("ChatContainer", () => {
       expect(screen.getByText("second")).toBeInTheDocument();
     });
 
-    expect(mockStart).toHaveBeenCalledTimes(1);
+    // resume should be called once for the second request, not for the aborted one
+    expect(mockResume).toHaveBeenCalledTimes(1);
   });
 
   test("should call speak with full text when TTS is enabled", async () => {
@@ -452,9 +456,9 @@ describe("ChatContainer", () => {
     });
   });
 
-  test("should skip startVoice in finally when TTS is enabled", async () => {
-    const user = userEvent.setup();
+  test("should skip resume in finally when TTS is enabled", async () => {
     mockIsSupported = true;
+    mockVoiceMode = true;
 
     mockFetch.mockResolvedValue(
       createMockResponse([
@@ -464,14 +468,13 @@ describe("ChatContainer", () => {
 
     render(<ChatContainer />);
 
-    await user.click(
-      screen.getByRole("button", { name: "音声入力を開始" })
-    );
-    mockStart.mockClear();
-
+    // Enable TTS
+    const user = userEvent.setup();
     await user.click(
       screen.getByRole("button", { name: "読み上げをON" })
     );
+
+    mockResume.mockClear();
 
     await act(async () => {
       capturedOnResult!("voice input");
@@ -481,25 +484,23 @@ describe("ChatContainer", () => {
       expect(mockSpeak).toHaveBeenCalledWith("response");
     });
 
-    expect(mockStart).not.toHaveBeenCalled();
+    // resume should NOT be called in finally when TTS is enabled
+    expect(mockResume).not.toHaveBeenCalled();
   });
 
-  test("should call startVoice when onTtsEnd fires and voiceMode is on", async () => {
-    const user = userEvent.setup();
+  test("should call resume when onTtsEnd fires", async () => {
     mockIsSupported = true;
+    mockVoiceMode = true;
 
     render(<ChatContainer />);
 
-    await user.click(
-      screen.getByRole("button", { name: "音声入力を開始" })
-    );
-    mockStart.mockClear();
+    mockResume.mockClear();
 
     act(() => {
       capturedOnEnd!();
     });
 
-    expect(mockStart).toHaveBeenCalledTimes(1);
+    expect(mockResume).toHaveBeenCalledTimes(1);
   });
 
   test("should show TTS settings button", () => {

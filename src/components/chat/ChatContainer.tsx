@@ -14,7 +14,6 @@ const CHAT_API_ENDPOINT = "/api/chat";
 export function ChatContainer() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const voiceModeRef = useRef(false);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const ttsEnabledRef = useRef(false);
   const [ttsSettingsOpen, setTtsSettingsOpen] = useState(false);
@@ -42,7 +41,7 @@ export function ChatContainer() {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    stopVoice();
+    suspendVoice();
     stopTts();
 
     try {
@@ -85,26 +84,26 @@ export function ChatContainer() {
       abortControllerRef.current = null;
       // AbortError means a new request replaced this one; that request handles voice restart
       // TTS再生中は音声認識を再開しない（onTtsEnd で再開する）
-      if (voiceModeRef.current && !controller.signal.aborted && !ttsEnabledRef.current) {
-        startVoice();
+      if (!controller.signal.aborted && !ttsEnabledRef.current) {
+        resumeVoice();
       }
     }
   }, []);
 
   const {
-    start: startVoice,
-    stop: stopVoice,
-    isListening,
+    enableVoiceMode,
+    disableVoiceMode,
+    suspend: suspendVoice,
+    resume: resumeVoice,
+    voiceMode,
     isSupported: isVoiceSupported,
     transcript,
     error: voiceError,
   } = useSpeechRecognition({ onResult: handleSend });
 
   const onTtsEnd = useCallback(() => {
-    if (voiceModeRef.current) {
-      startVoice();
-    }
-  }, [startVoice]);
+    resumeVoice();
+  }, [resumeVoice]);
 
   const {
     speak,
@@ -120,22 +119,20 @@ export function ChatContainer() {
     refetchSpeakers,
   } = useTts({ onEnd: onTtsEnd });
 
-  // voiceError時にintentフラグをリセット（UIはisListeningで自動同期）
+  // voiceError時にvoiceModeをリセット
   useEffect(() => {
     if (voiceError) {
-      voiceModeRef.current = false;
+      disableVoiceMode();
     }
-  }, [voiceError]);
+  }, [voiceError, disableVoiceMode]);
 
   const toggleVoiceMode = useCallback(() => {
-    if (isListening) {
-      voiceModeRef.current = false;
-      stopVoice();
+    if (voiceMode) {
+      disableVoiceMode();
     } else {
-      voiceModeRef.current = true;
-      startVoice();
+      enableVoiceMode();
     }
-  }, [isListening, startVoice, stopVoice]);
+  }, [voiceMode, enableVoiceMode, disableVoiceMode]);
 
   const toggleTts = useCallback(() => {
     const next = !ttsEnabledRef.current;
@@ -201,7 +198,7 @@ export function ChatContainer() {
       )}
       <MessageInput
         onSend={handleSend}
-        isListening={isListening}
+        voiceMode={voiceMode}
         onToggleVoiceMode={toggleVoiceMode}
         isVoiceSupported={isVoiceSupported}
         transcript={transcript}

@@ -4,7 +4,7 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 
 interface MessageInputProps {
   onSend: (message: string) => void;
-  isListening: boolean;
+  voiceMode: boolean;
   onToggleVoiceMode: () => void;
   isVoiceSupported: boolean;
   transcript: string;
@@ -17,7 +17,7 @@ interface MessageInputProps {
 
 export function MessageInput({
   onSend,
-  isListening,
+  voiceMode,
   onToggleVoiceMode,
   isVoiceSupported,
   transcript,
@@ -44,7 +44,7 @@ export function MessageInput({
     }
   }
 
-  const displayValue = isListening && transcript ? transcript : input;
+  const displayValue = voiceMode && transcript ? transcript : input;
 
   return (
     <form onSubmit={handleSubmit} className="flex gap-3 p-4 border-t border-zinc-200 dark:border-zinc-700">
@@ -110,9 +110,9 @@ export function MessageInput({
         <button
           type="button"
           onClick={onToggleVoiceMode}
-          aria-label={isListening ? "音声入力を停止" : "音声入力を開始"}
+          aria-label={voiceMode ? "音声入力を停止" : "音声入力を開始"}
           className={`rounded-lg px-3 py-2 transition-colors self-end ${
-            isListening
+            voiceMode
               ? "bg-red-500 text-white hover:bg-red-600"
               : "bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-600"
           }`}
