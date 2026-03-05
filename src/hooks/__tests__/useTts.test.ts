@@ -3,12 +3,16 @@ import { useTts } from "../useTts";
 import { TTS_ENGINE_BROWSER, TTS_ENGINE_VOICEVOX } from "@/types/tts-settings";
 
 const mockBrowserSpeak = jest.fn();
+const mockBrowserEnqueue = jest.fn();
+const mockBrowserFinishStream = jest.fn();
 const mockBrowserStop = jest.fn();
 let mockBrowserIsSpeaking = false;
 
 jest.mock("../useSpeechSynthesis", () => ({
   useSpeechSynthesis: () => ({
     speak: mockBrowserSpeak,
+    enqueue: mockBrowserEnqueue,
+    finishStream: mockBrowserFinishStream,
     stop: mockBrowserStop,
     isSpeaking: mockBrowserIsSpeaking,
     isSupported: true,
@@ -17,6 +21,8 @@ jest.mock("../useSpeechSynthesis", () => ({
 }));
 
 const mockVoicevoxSpeak = jest.fn();
+const mockVoicevoxEnqueue = jest.fn();
+const mockVoicevoxFinishStream = jest.fn();
 const mockVoicevoxStop = jest.fn();
 let mockVoicevoxIsSpeaking = false;
 let mockVoicevoxError: string | null = null;
@@ -24,6 +30,8 @@ let mockVoicevoxError: string | null = null;
 jest.mock("../useVoicevox", () => ({
   useVoicevox: () => ({
     speak: mockVoicevoxSpeak,
+    enqueue: mockVoicevoxEnqueue,
+    finishStream: mockVoicevoxFinishStream,
     stop: mockVoicevoxStop,
     isSpeaking: mockVoicevoxIsSpeaking,
     error: mockVoicevoxError,
@@ -192,5 +200,65 @@ describe("useTts", () => {
     const { result } = renderHook(() => useTts({ onEnd }));
 
     expect(result.current.settings.engine).toBe(TTS_ENGINE_BROWSER);
+  });
+
+  test("should call browser enqueue when engine is browser", () => {
+    const onEnd = jest.fn();
+    const { result } = renderHook(() => useTts({ onEnd }));
+
+    act(() => {
+      result.current.enqueue("文章1。");
+    });
+
+    expect(mockBrowserEnqueue).toHaveBeenCalledWith("文章1。");
+    expect(mockVoicevoxEnqueue).not.toHaveBeenCalled();
+  });
+
+  test("should call voicevox enqueue when engine is voicevox", () => {
+    const onEnd = jest.fn();
+    const { result } = renderHook(() => useTts({ onEnd }));
+
+    act(() => {
+      result.current.updateSettings((prev) => ({
+        ...prev,
+        engine: TTS_ENGINE_VOICEVOX,
+      }));
+    });
+
+    act(() => {
+      result.current.enqueue("文章1。");
+    });
+
+    expect(mockVoicevoxEnqueue).toHaveBeenCalledWith("文章1。");
+    expect(mockBrowserEnqueue).not.toHaveBeenCalled();
+  });
+
+  test("should call browser finishStream when engine is browser", () => {
+    const onEnd = jest.fn();
+    const { result } = renderHook(() => useTts({ onEnd }));
+
+    act(() => {
+      result.current.finishStream();
+    });
+
+    expect(mockBrowserFinishStream).toHaveBeenCalled();
+  });
+
+  test("should call voicevox finishStream when engine is voicevox", () => {
+    const onEnd = jest.fn();
+    const { result } = renderHook(() => useTts({ onEnd }));
+
+    act(() => {
+      result.current.updateSettings((prev) => ({
+        ...prev,
+        engine: TTS_ENGINE_VOICEVOX,
+      }));
+    });
+
+    act(() => {
+      result.current.finishStream();
+    });
+
+    expect(mockVoicevoxFinishStream).toHaveBeenCalled();
   });
 });

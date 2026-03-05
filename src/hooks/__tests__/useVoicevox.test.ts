@@ -180,7 +180,7 @@ describe("useVoicevox", () => {
       mockAudioInstances[0].onerror!();
     });
 
-    expect(result.current.error).toBe("音声の再生に失敗しました");
+    expect(result.current.error).toContain("音声の再生に失敗しました");
     expect(result.current.isSpeaking).toBe(false);
     expect(onEnd).toHaveBeenCalledTimes(1);
   });

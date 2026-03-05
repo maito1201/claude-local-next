@@ -29,6 +29,8 @@ jest.mock("@/hooks/useSpeechRecognition", () => ({
 }));
 
 const mockSpeak = jest.fn();
+const mockEnqueueTts = jest.fn();
+const mockFinishTtsStream = jest.fn();
 const mockStopTts = jest.fn();
 let mockIsTtsSupported = true;
 let capturedOnEnd: (() => void) | null = null;
@@ -38,6 +40,8 @@ jest.mock("@/hooks/useTts", () => ({
     capturedOnEnd = onEnd;
     return {
       speak: mockSpeak,
+      enqueue: mockEnqueueTts,
+      finishStream: mockFinishTtsStream,
       stop: mockStopTts,
       isSpeaking: false,
       isSupported: mockIsTtsSupported,
@@ -101,6 +105,8 @@ describe("ChatContainer", () => {
     mockSuspend.mockClear();
     mockResume.mockClear();
     mockSpeak.mockClear();
+    mockEnqueueTts.mockClear();
+    mockFinishTtsStream.mockClear();
     mockStopTts.mockClear();
     mockIsSupported = true;
     mockIsTtsSupported = true;
@@ -386,7 +392,7 @@ describe("ChatContainer", () => {
     expect(mockResume).toHaveBeenCalledTimes(1);
   });
 
-  test("should call speak with full text when TTS is enabled", async () => {
+  test("should stream TTS via enqueue when TTS is enabled", async () => {
     const user = userEvent.setup();
 
     mockFetch.mockResolvedValue(
@@ -408,8 +414,48 @@ describe("ChatContainer", () => {
     await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
 
     await waitFor(() => {
-      expect(mockSpeak).toHaveBeenCalledWith("Hello world");
+      // Text without sentence boundary is flushed at end of stream
+      expect(mockEnqueueTts).toHaveBeenCalledWith("Hello world");
+      expect(mockFinishTtsStream).toHaveBeenCalled();
     });
+
+    // speak should NOT be called in streaming mode
+    expect(mockSpeak).not.toHaveBeenCalled();
+  });
+
+  test("should enqueue each sentence as it arrives during streaming TTS", async () => {
+    const user = userEvent.setup();
+
+    mockFetch.mockResolvedValue(
+      createMockResponse([
+        'data: {"type":"text_delta","text":"こんにちは。"}\n\n',
+        'data: {"type":"text_delta","text":"今日はいい天気ですね。"}\n\n',
+        'data: {"type":"text_delta","text":"残り"}\n\n',
+        'data: {"type":"result"}\n\n',
+      ])
+    );
+
+    render(<ChatContainer />);
+
+    await user.click(
+      screen.getByRole("button", { name: "読み上げをON" })
+    );
+
+    await user.type(
+      screen.getByPlaceholderText("メッセージを入力..."),
+      "Hi"
+    );
+    await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
+
+    await waitFor(() => {
+      expect(mockFinishTtsStream).toHaveBeenCalled();
+    });
+
+    // Sentences with terminators should be enqueued as they arrive
+    expect(mockEnqueueTts).toHaveBeenCalledWith("こんにちは。");
+    expect(mockEnqueueTts).toHaveBeenCalledWith("今日はいい天気ですね。");
+    // Remaining text without terminator is flushed at end
+    expect(mockEnqueueTts).toHaveBeenCalledWith("残り");
   });
 
   test("should not call speak when TTS is disabled", async () => {
@@ -481,7 +527,9 @@ describe("ChatContainer", () => {
     });
 
     await waitFor(() => {
-      expect(mockSpeak).toHaveBeenCalledWith("response");
+      // Streaming TTS: enqueue + finishStream
+      expect(mockEnqueueTts).toHaveBeenCalledWith("response");
+      expect(mockFinishTtsStream).toHaveBeenCalled();
     });
 
     // resume should NOT be called in finally when TTS is enabled

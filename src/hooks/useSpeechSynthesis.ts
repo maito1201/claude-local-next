@@ -10,6 +10,8 @@ interface UseSpeechSynthesisOptions {
 
 interface UseSpeechSynthesisReturn {
   speak: (text: string) => void;
+  enqueue: (text: string) => void;
+  finishStream: () => void;
   stop: () => void;
   isSpeaking: boolean;
   isSupported: boolean;
@@ -38,6 +40,12 @@ export function useSpeechSynthesis({
   const rateRef = useRef(rate);
   const voiceURIRef = useRef(voiceURI);
 
+  // Queue state for streaming TTS
+  const queueRef = useRef<string[]>([]);
+  const queueIndexRef = useRef(0);
+  const isProcessingRef = useRef(false);
+  const streamFinishedRef = useRef(false);
+
   onEndRef.current = onEnd;
   volumeRef.current = volume;
   rateRef.current = rate;
@@ -47,13 +55,135 @@ export function useSpeechSynthesis({
     setIsSupported(isSpeechSynthesisSupported());
   }, []);
 
+  const resetQueue = useCallback(() => {
+    queueRef.current = [];
+    queueIndexRef.current = 0;
+    isProcessingRef.current = false;
+    streamFinishedRef.current = false;
+  }, []);
+
   const stop = useCallback(() => {
     speakIdRef.current += 1;
     setIsSpeaking(false);
+    resetQueue();
     if (isSpeechSynthesisSupported()) {
       window.speechSynthesis.cancel();
     }
-  }, []);
+  }, [resetQueue]);
+
+  /**
+   * Speak a single chunk and call onDone when finished.
+   */
+  const speakSingleChunk = useCallback(
+    (text: string, currentId: number, onDone: () => void) => {
+      if (currentId !== speakIdRef.current) return;
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = navigator.language;
+      utterance.volume = volumeRef.current;
+      utterance.rate = rateRef.current;
+
+      if (voiceURIRef.current) {
+        const voices = window.speechSynthesis.getVoices();
+        const voice = voices.find((v) => v.voiceURI === voiceURIRef.current);
+        if (voice) {
+          utterance.voice = voice;
+        }
+      }
+
+      utterance.onend = () => {
+        onDone();
+      };
+
+      utterance.onerror = (event) => {
+        if (event.error === "canceled") return;
+        setIsSpeaking(false);
+        isProcessingRef.current = false;
+        onEndRef.current();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    },
+    []
+  );
+
+  /**
+   * Process the queue: play chunks sequentially.
+   */
+  const processQueue = useCallback(
+    (currentId: number) => {
+      if (isProcessingRef.current) return;
+      isProcessingRef.current = true;
+
+      function processNext() {
+        if (currentId !== speakIdRef.current) return;
+
+        if (queueIndexRef.current >= queueRef.current.length) {
+          if (streamFinishedRef.current) {
+            // All done
+            setIsSpeaking(false);
+            isProcessingRef.current = false;
+            onEndRef.current();
+            return;
+          }
+          // Wait for more chunks
+          isProcessingRef.current = false;
+          return;
+        }
+
+        const chunk = queueRef.current[queueIndexRef.current];
+        queueIndexRef.current++;
+
+        speakSingleChunk(chunk, currentId, processNext);
+      }
+
+      processNext();
+    },
+    [speakSingleChunk]
+  );
+
+  /**
+   * Enqueue a text segment for streaming TTS.
+   */
+  const enqueue = useCallback(
+    (text: string) => {
+      if (!isSpeechSynthesisSupported()) return;
+
+      const subChunks = splitTextIntoChunks(text, CHUNK_MAX_LENGTH);
+      const wasEmpty = queueRef.current.length === 0;
+      queueRef.current.push(...subChunks);
+
+      if (!isProcessingRef.current) {
+        if (wasEmpty) {
+          speakIdRef.current += 1;
+          streamFinishedRef.current = false;
+          setIsSpeaking(true);
+        }
+        const currentId = speakIdRef.current;
+        processQueue(currentId);
+      }
+    },
+    [processQueue]
+  );
+
+  /**
+   * Signal that no more text will be enqueued.
+   */
+  const finishStream = useCallback(() => {
+    streamFinishedRef.current = true;
+    // If processing already finished waiting, restart it
+    if (!isProcessingRef.current && queueRef.current.length > 0) {
+      processQueue(speakIdRef.current);
+    }
+    // If queue is empty and processing stopped, trigger onEnd
+    if (
+      !isProcessingRef.current &&
+      queueIndexRef.current >= queueRef.current.length
+    ) {
+      setIsSpeaking(false);
+      onEndRef.current();
+    }
+  }, [processQueue]);
 
   const speak = useCallback(
     (text: string) => {
@@ -67,46 +197,14 @@ export function useSpeechSynthesis({
 
       setIsSpeaking(true);
 
-      function speakChunk(index: number) {
-        if (currentId !== speakIdRef.current) return;
-        if (index >= chunks.length) {
-          setIsSpeaking(false);
-          onEndRef.current();
-          return;
-        }
+      queueRef.current = chunks;
+      queueIndexRef.current = 0;
+      streamFinishedRef.current = true;
+      isProcessingRef.current = false;
 
-        const utterance = new SpeechSynthesisUtterance(chunks[index]);
-        utterance.lang = navigator.language;
-        utterance.volume = volumeRef.current;
-        utterance.rate = rateRef.current;
-
-        if (voiceURIRef.current) {
-          const voices = window.speechSynthesis.getVoices();
-          const voice = voices.find(
-            (v) => v.voiceURI === voiceURIRef.current
-          );
-          if (voice) {
-            utterance.voice = voice;
-          }
-        }
-
-        utterance.onend = () => {
-          speakChunk(index + 1);
-        };
-
-        utterance.onerror = (event) => {
-          // "canceled" は stop() による正常なキャンセル
-          if (event.error === "canceled") return;
-          setIsSpeaking(false);
-          onEndRef.current();
-        };
-
-        window.speechSynthesis.speak(utterance);
-      }
-
-      speakChunk(0);
+      processQueue(currentId);
     },
-    [stop]
+    [stop, processQueue]
   );
 
   useEffect(() => {
@@ -118,5 +216,5 @@ export function useSpeechSynthesis({
     };
   }, []);
 
-  return { speak, stop, isSpeaking, isSupported };
+  return { speak, enqueue, finishStream, stop, isSpeaking, isSupported };
 }

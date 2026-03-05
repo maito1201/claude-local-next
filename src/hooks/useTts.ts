@@ -23,6 +23,8 @@ interface UseTtsOptions {
 
 interface UseTtsReturn {
   speak: (text: string) => void;
+  enqueue: (text: string) => void;
+  finishStream: () => void;
   stop: () => void;
   isSpeaking: boolean;
   isSupported: boolean;
@@ -134,6 +136,17 @@ export function useTts({ onEnd }: UseTtsOptions): UseTtsReturn {
     []
   );
 
+  const enqueue = useCallback(
+    (text: string) => {
+      engines.current[engineRef.current].enqueue(text);
+    },
+    []
+  );
+
+  const finishStream = useCallback(() => {
+    engines.current[engineRef.current].finishStream();
+  }, []);
+
   const stop = useCallback(() => {
     browserTts.stop();
     voicevox.stop();
@@ -143,6 +156,8 @@ export function useTts({ onEnd }: UseTtsOptions): UseTtsReturn {
 
   return {
     speak,
+    enqueue,
+    finishStream,
     stop,
     isSpeaking,
     isSupported,

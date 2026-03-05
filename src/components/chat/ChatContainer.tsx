@@ -5,6 +5,7 @@ import { MessageList } from "./MessageList";
 import { MessageInput } from "./MessageInput";
 import { TtsSettingsPanel } from "./TtsSettingsPanel";
 import { parseSSELines } from "@/lib/sse-reader";
+import { extractSentences } from "@/lib/split-text";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useTts } from "@/hooks/useTts";
 import type { ChatMessage } from "@/types/chat";
@@ -60,9 +61,19 @@ export function ChatContainer() {
         throw new Error("Response body is null");
       }
 
-      const fullText = await readSSEStream(response.body, assistantId);
+      const shouldStream = ttsEnabledRef.current;
 
-      if (ttsEnabledRef.current && fullText) {
+      const fullText = await readSSEStream(
+        response.body,
+        assistantId,
+        shouldStream
+      );
+
+      if (shouldStream) {
+        // Streaming TTS: signal that no more sentences will come
+        finishTtsStream();
+      } else if (ttsEnabledRef.current && fullText) {
+        // Fallback: TTS was enabled after streaming started
         speak(fullText);
         return;
       }
@@ -107,6 +118,8 @@ export function ChatContainer() {
 
   const {
     speak,
+    enqueue: enqueueTts,
+    finishStream: finishTtsStream,
     stop: stopTts,
     isSpeaking,
     isSupported: isTtsSupported,
@@ -145,12 +158,15 @@ export function ChatContainer() {
 
   async function readSSEStream(
     body: ReadableStream<Uint8Array>,
-    assistantId: string
+    assistantId: string,
+    streamToTts: boolean
   ): Promise<string> {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let fullText = "";
+    // Buffer for sentence extraction (streaming TTS)
+    let sentenceBuffer = "";
 
     for (;;) {
       const { done, value } = await reader.read();
@@ -171,6 +187,18 @@ export function ChatContainer() {
                 : m
             )
           );
+
+          // Streaming TTS: extract complete sentences and enqueue immediately
+          if (streamToTts) {
+            sentenceBuffer += deltaText;
+            const { sentences, remaining: sentenceRemaining } =
+              extractSentences(sentenceBuffer);
+            sentenceBuffer = sentenceRemaining;
+
+            for (const sentence of sentences) {
+              enqueueTts(sentence);
+            }
+          }
         }
 
         if (chunk.type === "error" && chunk.error) {
@@ -183,6 +211,11 @@ export function ChatContainer() {
           );
         }
       }
+    }
+
+    // Flush remaining sentence buffer to TTS
+    if (streamToTts && sentenceBuffer.trim()) {
+      enqueueTts(sentenceBuffer.trim());
     }
 
     return fullText;
