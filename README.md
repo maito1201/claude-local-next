@@ -10,8 +10,9 @@ VOICEVOX を使った音声読み上げ機能が特徴です
 
 - Node.js
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) がインストール・認証済みであること
-- （VOICEVOX 読み上げを使う場合）[VOICEVOX](https://voicevox.hiroshiba.jp/) が起動していること
-  - アプリ版を起動するか、Docker で `docker run --rm -p 50021:50021 voicevox/voicevox_engine:latest`
+- （VOICEVOX 読み上げを使う場合）以下のいずれか:
+  - [Docker](https://www.docker.com/) がインストールされていること（**推奨**: アプリ起動時に自動で Docker コンテナが立ち上がります）
+  - または [VOICEVOX](https://voicevox.hiroshiba.jp/) アプリ版を手動で起動しておくこと
 
 ## 使い方
 

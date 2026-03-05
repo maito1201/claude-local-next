@@ -2,6 +2,17 @@ import { VOICEVOX_DEFAULT_SPEAKER_NAME } from "@/types/tts-settings";
 
 export const VOICEVOX_BASE_URL = "http://localhost:50021";
 
+async function tryAutoStart(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/voicevox/start", { method: "POST" });
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.success === true;
+  } catch {
+    return false;
+  }
+}
+
 export interface VoicevoxStyle {
   name: string;
   id: number;
@@ -27,7 +38,17 @@ export async function fetchSpeakers(): Promise<VoicevoxSpeaker[]> {
   try {
     response = await fetch(`${VOICEVOX_BASE_URL}/speakers`);
   } catch {
-    throw new VoicevoxConnectionError();
+    // 接続失敗時にサーバー経由で自動起動を試みる
+    const started = await tryAutoStart();
+    if (!started) {
+      throw new VoicevoxConnectionError();
+    }
+    // 起動成功したのでリトライ
+    try {
+      response = await fetch(`${VOICEVOX_BASE_URL}/speakers`);
+    } catch {
+      throw new VoicevoxConnectionError();
+    }
   }
 
   if (!response.ok) {

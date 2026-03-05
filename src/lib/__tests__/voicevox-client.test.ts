@@ -38,8 +38,61 @@ describe("fetchSpeakers", () => {
     expect(mockFetch).toHaveBeenCalledWith(`${VOICEVOX_BASE_URL}/speakers`);
   });
 
-  test("should throw VoicevoxConnectionError on network failure", async () => {
-    mockFetch.mockRejectedValue(new TypeError("Failed to fetch"));
+  test("should auto-start VoiceVox and retry on network failure", async () => {
+    const speakers: VoicevoxSpeaker[] = [
+      {
+        name: "ずんだもん",
+        speaker_uuid: "uuid-1",
+        styles: [{ name: "ノーマル", id: 3 }],
+      },
+    ];
+
+    mockFetch
+      // 1st call: speakers fetch fails
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      // 2nd call: auto-start API succeeds
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, status: "started" }),
+      })
+      // 3rd call: retry speakers fetch succeeds
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve(speakers),
+      });
+
+    const result = await fetchSpeakers();
+
+    expect(result).toEqual(speakers);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    expect(mockFetch).toHaveBeenNthCalledWith(2, "/api/voicevox/start", {
+      method: "POST",
+    });
+  });
+
+  test("should throw VoicevoxConnectionError when auto-start fails", async () => {
+    mockFetch
+      // 1st call: speakers fetch fails
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      // 2nd call: auto-start API fails
+      .mockResolvedValueOnce({
+        ok: false,
+      });
+
+    await expect(fetchSpeakers()).rejects.toThrow(VoicevoxConnectionError);
+  });
+
+  test("should throw VoicevoxConnectionError when retry after auto-start still fails", async () => {
+    mockFetch
+      // 1st call: speakers fetch fails
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      // 2nd call: auto-start API succeeds
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, status: "started" }),
+      })
+      // 3rd call: retry speakers fetch still fails
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
 
     await expect(fetchSpeakers()).rejects.toThrow(VoicevoxConnectionError);
   });
