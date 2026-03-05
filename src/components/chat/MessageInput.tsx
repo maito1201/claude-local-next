@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type FormEvent, type KeyboardEvent } from "react";
 
 interface MessageInputProps {
   onSend: (message: string) => void;
@@ -28,6 +28,20 @@ export function MessageInput({
   onOpenTtsSettings,
 }: MessageInputProps) {
   const [input, setInput] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const displayValue = voiceMode && transcript ? transcript : input;
+
+  const adjustHeight = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, []);
+
+  useEffect(() => {
+    adjustHeight();
+  }, [displayValue, adjustHeight]);
 
   function handleSubmit(e?: FormEvent) {
     e?.preventDefault();
@@ -44,17 +58,16 @@ export function MessageInput({
     }
   }
 
-  const displayValue = voiceMode && transcript ? transcript : input;
-
   return (
-    <form onSubmit={handleSubmit} className="flex gap-3 p-4 border-t border-zinc-200 dark:border-zinc-700">
+    <form onSubmit={handleSubmit} className="flex items-end gap-3 p-4 border-t border-zinc-200 dark:border-zinc-700">
       <textarea
+        ref={textareaRef}
         value={displayValue}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder="メッセージを入力..."
         rows={1}
-        className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-4 py-2 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+        className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800 px-4 py-2 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none max-h-40 overflow-y-auto"
       />
       {isTtsSupported && (
         <>
