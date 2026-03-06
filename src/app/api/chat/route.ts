@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { sendMessage, isTextDelta, isResultEvent } from "@/lib/claude-process";
+import { sendMessage, isTextDelta, isResultEvent, isPermissionRequest } from "@/lib/claude-process";
 import type { SSEChunk } from "@/types/chat";
 
 interface ChatRequestBody {
@@ -30,6 +30,18 @@ export async function POST(request: NextRequest): Promise<Response> {
           body.message,
           (parsed: Record<string, unknown>) => {
             if (closed) return;
+
+            if (isPermissionRequest(parsed)) {
+              const request = parsed.request as Record<string, unknown>;
+              const chunk: SSEChunk = {
+                type: "permission_request",
+                requestId: parsed.request_id as string,
+                toolName: request.tool_name as string,
+                input: request.input as Record<string, unknown>,
+                description: request.description as string | undefined,
+              };
+              controller.enqueue(encoder.encode(formatSSE(chunk)));
+            }
 
             if (isTextDelta(parsed)) {
               const chunk: SSEChunk = {

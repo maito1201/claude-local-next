@@ -4,10 +4,12 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { MessageList } from "./MessageList";
 import { MessageInput } from "./MessageInput";
 import { TtsSettingsPanel } from "./TtsSettingsPanel";
+import { PermissionDialog } from "./PermissionDialog";
 import { parseSSELines } from "@/lib/sse-reader";
 import { extractSentences } from "@/lib/split-text";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useTts } from "@/hooks/useTts";
+import { usePermission } from "@/hooks/usePermission";
 import type { ChatMessage } from "@/types/chat";
 
 const CHAT_API_ENDPOINT = "/api/chat";
@@ -18,6 +20,8 @@ export function ChatContainer() {
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const ttsEnabledRef = useRef(false);
   const [ttsSettingsOpen, setTtsSettingsOpen] = useState(false);
+  const { pendingPermission, setPendingPermission, handlePermissionResponse } =
+    usePermission();
 
   const handleSend = useCallback(async (text: string) => {
     if (abortControllerRef.current) {
@@ -177,7 +181,16 @@ export function ChatContainer() {
       buffer = remaining;
 
       for (const chunk of chunks) {
-        if (chunk.type === "text_delta" && chunk.text) {
+        if (chunk.type === "permission_request") {
+          setPendingPermission({
+            requestId: chunk.requestId,
+            toolName: chunk.toolName,
+            input: chunk.input,
+            description: chunk.description,
+          });
+        }
+
+        if (chunk.type === "text_delta") {
           const deltaText = chunk.text;
           fullText += deltaText;
           setMessages((prev) =>
@@ -201,7 +214,7 @@ export function ChatContainer() {
           }
         }
 
-        if (chunk.type === "error" && chunk.error) {
+        if (chunk.type === "error") {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
@@ -250,6 +263,12 @@ export function ChatContainer() {
           speakerLoadError={speakerLoadError}
           onRefetchSpeakers={refetchSpeakers}
           onClose={() => setTtsSettingsOpen(false)}
+        />
+      )}
+      {pendingPermission && (
+        <PermissionDialog
+          pendingPermission={pendingPermission}
+          onRespond={handlePermissionResponse}
         />
       )}
     </div>

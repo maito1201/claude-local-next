@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "child_process";
 import type {
   ClaudeStdinMessage,
   ClaudeControlResponse,
+  ControlResponseBehavior,
 } from "@/types/chat";
 
 const CLAUDE_CLI_PATH =
@@ -14,7 +15,8 @@ const CLAUDE_CLI_ARGS = [
   "--input-format",
   "stream-json",
   "--include-partial-messages",
-  "--dangerously-skip-permissions",
+  "--permission-prompt-tool",
+  "stdio",
 ] as const;
 
 type MessageCallback = (parsed: Record<string, unknown>) => void;
@@ -25,6 +27,12 @@ interface ClaudeProcessState {
   currentCallback: MessageCallback | null;
   currentReject: ((err: Error) => void) | null;
   messageGeneration: number;
+  pendingPermissions: Map<
+    string,
+    { input: Record<string, unknown>; toolName: string }
+  >;
+  lineBuffer: string;
+  alwaysAllowedTools: Set<string>;
 }
 
 const globalForClaude = globalThis as typeof globalThis & {
@@ -50,10 +58,15 @@ function ensureProcess(): ClaudeProcessState {
     currentCallback: null,
     currentReject: null,
     messageGeneration: 0,
+    pendingPermissions: new Map(),
+    lineBuffer: "",
+    alwaysAllowedTools: new Set(),
   };
 
   proc.stdout.on("data", (chunk: Buffer) => {
-    const lines = chunk.toString().split("\n");
+    state.lineBuffer += chunk.toString();
+    const lines = state.lineBuffer.split("\n");
+    state.lineBuffer = lines.pop() ?? "";
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed) continue;
@@ -105,24 +118,119 @@ function handleStdoutLine(state: ClaudeProcessState, line: string): void {
   }
 }
 
-function handleControlRequest(
+function writeControlResponse(
   state: ClaudeProcessState,
-  request: Record<string, unknown>
+  requestId: string,
+  response: ControlResponseBehavior
 ): void {
   const stdin = state.process.stdin;
   if (!stdin) return;
 
-  if (typeof request.request_id !== "string") return;
-
-  const response: ClaudeControlResponse = {
+  const controlResponse: ClaudeControlResponse = {
     type: "control_response",
     response: {
       subtype: "success",
-      request_id: request.request_id,
-      response: null,
+      request_id: requestId,
+      response,
     },
   };
-  stdin.write(JSON.stringify(response) + "\n");
+  stdin.write(JSON.stringify(controlResponse) + "\n");
+}
+
+function handleControlRequest(
+  state: ClaudeProcessState,
+  request: Record<string, unknown>
+): void {
+  if (typeof request.request_id !== "string") return;
+
+  const requestBody = request.request as Record<string, unknown> | undefined;
+
+  if (requestBody?.subtype === "can_use_tool") {
+    if (typeof requestBody.tool_name !== "string") {
+      writeControlResponse(state, request.request_id, {
+        behavior: "deny",
+        message: "Missing tool_name in permission request",
+      });
+      return;
+    }
+
+    const toolInput = (requestBody.input as Record<string, unknown>) ?? {};
+
+    if (state.alwaysAllowedTools.has(requestBody.tool_name)) {
+      writeControlResponse(state, request.request_id, {
+        behavior: "allow",
+        updatedInput: toolInput,
+      });
+      return;
+    }
+
+    state.pendingPermissions.set(request.request_id, {
+      input: toolInput,
+      toolName: requestBody.tool_name,
+    });
+    if (state.currentCallback) {
+      state.currentCallback(request);
+    }
+    return;
+  }
+
+  writeControlResponse(state, request.request_id, null);
+}
+
+export function isPermissionRequest(
+  parsed: Record<string, unknown>
+): boolean {
+  if (parsed.type !== "control_request") return false;
+  const request = parsed.request as Record<string, unknown> | undefined;
+  return request?.subtype === "can_use_tool";
+}
+
+export function respondToPermission(
+  requestId: string,
+  allow: boolean,
+  options?: { message?: string; alwaysAllow?: boolean }
+): void {
+  const state = globalForClaude.__claudeProcess;
+  if (!state?.process.stdin) {
+    throw new Error("Claude CLI process is not running");
+  }
+
+  const stored = state.pendingPermissions.get(requestId);
+  if (stored === undefined) {
+    throw new Error(`No pending permission request: ${requestId}`);
+  }
+
+  state.pendingPermissions.delete(requestId);
+
+  if (!allow) {
+    const response: ControlResponseBehavior = {
+      behavior: "deny",
+      message: options?.message ?? "User denied this action",
+    };
+    writeControlResponse(state, requestId, response);
+    return;
+  }
+
+  if (options?.alwaysAllow) {
+    state.alwaysAllowedTools.add(stored.toolName);
+  }
+
+  const response: ControlResponseBehavior = {
+    behavior: "allow",
+    updatedInput: stored.input,
+    ...(options?.alwaysAllow && {
+      updatedPermissions: [
+        {
+          type: "addRules" as const,
+          rules: [{ toolName: stored.toolName }],
+          behavior: "allow" as const,
+          destination: "session" as const,
+        },
+      ],
+    }),
+  };
+
+  writeControlResponse(state, requestId, response);
 }
 
 export function buildStdinMessage(text: string): ClaudeStdinMessage {
@@ -161,6 +269,14 @@ export function sendMessage(
   const state = ensureProcess();
 
   if (state.busy) {
+    for (const reqId of state.pendingPermissions.keys()) {
+      writeControlResponse(state, reqId, {
+        behavior: "deny",
+        message: "Interrupted by new message",
+      });
+    }
+    state.pendingPermissions.clear();
+
     if (state.currentReject) {
       state.currentReject(new Error("Interrupted by new message"));
     }

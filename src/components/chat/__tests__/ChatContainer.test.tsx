@@ -558,4 +558,130 @@ describe("ChatContainer", () => {
       screen.getByRole("button", { name: "TTS設定" })
     ).toBeInTheDocument();
   });
+
+  test("should show permission dialog on permission_request SSE event", async () => {
+    const user = userEvent.setup();
+
+    mockFetch.mockResolvedValue(
+      createMockResponse([
+        'data: {"type":"permission_request","requestId":"perm-1","toolName":"Bash","input":{"command":"ls -la"}}\n\n',
+      ])
+    );
+
+    render(<ChatContainer />);
+
+    await user.type(
+      screen.getByPlaceholderText("メッセージを入力..."),
+      "Hello"
+    );
+    await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("権限リクエスト: Bash")).toBeInTheDocument();
+      expect(screen.getByText("ls -la")).toBeInTheDocument();
+    });
+  });
+
+  test("should close permission dialog and send allow response", async () => {
+    const user = userEvent.setup();
+
+    mockFetch.mockResolvedValue(
+      createMockResponse([
+        'data: {"type":"permission_request","requestId":"perm-2","toolName":"Write","input":{"file_path":"/tmp/test.txt"}}\n\n',
+      ])
+    );
+
+    render(<ChatContainer />);
+
+    await user.type(
+      screen.getByPlaceholderText("メッセージを入力..."),
+      "Hello"
+    );
+    await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("権限リクエスト: Write")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "許可" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("権限リクエスト: Write")).not.toBeInTheDocument();
+    });
+
+    // Verify permission API was called
+    const permissionCalls = mockFetch.mock.calls.filter(
+      (call) => (call[0] as string) === "/api/chat/permission"
+    );
+    expect(permissionCalls).toHaveLength(1);
+    const body = JSON.parse(permissionCalls[0][1].body as string);
+    expect(body.requestId).toBe("perm-2");
+    expect(body.allow).toBe(true);
+  });
+
+  test("should restore permission dialog when permission API call fails", async () => {
+    const user = userEvent.setup();
+
+    mockFetch.mockResolvedValue(
+      createMockResponse([
+        'data: {"type":"permission_request","requestId":"perm-fail","toolName":"Bash","input":{"command":"ls -la"}}\n\n',
+      ])
+    );
+
+    render(<ChatContainer />);
+
+    await user.type(
+      screen.getByPlaceholderText("メッセージを入力..."),
+      "Hello"
+    );
+    await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("権限リクエスト: Bash")).toBeInTheDocument();
+    });
+
+    mockFetch.mockRejectedValueOnce(new Error("Network error"));
+
+    await user.click(screen.getByRole("button", { name: "許可" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("権限リクエスト: Bash")).toBeInTheDocument();
+    });
+  });
+
+  test("should close permission dialog and send deny response", async () => {
+    const user = userEvent.setup();
+
+    mockFetch.mockResolvedValue(
+      createMockResponse([
+        'data: {"type":"permission_request","requestId":"perm-3","toolName":"Bash","input":{"command":"rm -rf /"}}\n\n',
+      ])
+    );
+
+    render(<ChatContainer />);
+
+    await user.type(
+      screen.getByPlaceholderText("メッセージを入力..."),
+      "Hello"
+    );
+    await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("権限リクエスト: Bash")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "拒否" }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("権限リクエスト: Bash")).not.toBeInTheDocument();
+    });
+
+    const permissionCalls = mockFetch.mock.calls.filter(
+      (call) => (call[0] as string) === "/api/chat/permission"
+    );
+    expect(permissionCalls).toHaveLength(1);
+    const body = JSON.parse(permissionCalls[0][1].body as string);
+    expect(body.requestId).toBe("perm-3");
+    expect(body.allow).toBe(false);
+  });
 });
