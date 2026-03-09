@@ -1,18 +1,20 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { ChatMessage } from "@/types/chat";
+import { ProcessingIndicator } from "./ProcessingIndicator";
+import type { ChatMessage, ProcessingState } from "@/types/chat";
 
 interface MessageListProps {
   messages: ChatMessage[];
+  processingState: ProcessingState;
 }
 
-export function MessageList({ messages }: MessageListProps) {
+export function MessageList({ messages, processingState }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, processingState]);
 
   if (messages.length === 0) {
     return (
@@ -40,6 +42,9 @@ export function MessageList({ messages }: MessageListProps) {
           </div>
         </div>
       ))}
+      {processingState && (
+        <ProcessingIndicator processingState={processingState} />
+      )}
       <div ref={bottomRef} />
     </div>
   );

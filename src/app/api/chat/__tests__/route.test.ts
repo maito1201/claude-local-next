@@ -2,18 +2,23 @@ import { NextRequest } from "next/server";
 
 jest.mock("@/lib/claude-process", () => ({
   sendMessage: jest.fn(),
+}));
+
+jest.mock("@/lib/claude-events", () => ({
   isTextDelta: jest.fn(),
   isResultEvent: jest.fn(),
   isPermissionRequest: jest.fn(),
+  getContentBlockStartType: jest.fn(),
 }));
 
 import { POST } from "../route";
+import { sendMessage } from "@/lib/claude-process";
 import {
-  sendMessage,
   isTextDelta,
   isResultEvent,
   isPermissionRequest,
-} from "@/lib/claude-process";
+  getContentBlockStartType,
+} from "@/lib/claude-events";
 
 const mockSendMessage = sendMessage as jest.MockedFunction<typeof sendMessage>;
 const mockIsTextDelta = isTextDelta as jest.MockedFunction<typeof isTextDelta>;
@@ -23,6 +28,8 @@ const mockIsResultEvent = isResultEvent as jest.MockedFunction<
 const mockIsPermissionRequest = isPermissionRequest as jest.MockedFunction<
   typeof isPermissionRequest
 >;
+const mockGetContentBlockStartType =
+  getContentBlockStartType as jest.MockedFunction<typeof getContentBlockStartType>;
 
 function createRequest(body: unknown): NextRequest {
   return new NextRequest("http://localhost/api/chat", {
@@ -49,15 +56,19 @@ async function readStream(response: Response): Promise<string> {
 describe("POST /api/chat", () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    mockIsTextDelta.mockImplementation(
-      (parsed) => parsed.type === "stream_event"
-    );
+    mockIsTextDelta.mockImplementation((parsed) => {
+      if (parsed.type !== "stream_event") return false;
+      const event = parsed.event as Record<string, unknown> | undefined;
+      const delta = event?.delta as Record<string, unknown> | undefined;
+      return delta?.type === "text_delta" && typeof delta.text === "string";
+    });
     mockIsResultEvent.mockImplementation(
       (parsed) => parsed.type === "result"
     );
     mockIsPermissionRequest.mockImplementation(
       (parsed) => parsed.type === "control_request"
     );
+    mockGetContentBlockStartType.mockReturnValue(null);
   });
 
   test("should return 400 when message field is missing", async () => {
@@ -164,6 +175,36 @@ describe("POST /api/chat", () => {
     expect(output).toContain('"type":"permission_request"');
     expect(output).toContain('"requestId":"perm-1"');
     expect(output).toContain('"toolName":"Bash"');
+    expect(output).toContain('"type":"result"');
+  });
+
+  test("should stream processing_state SSE chunk for content_block_start", async () => {
+    let capturedCallback: (parsed: Record<string, unknown>) => void;
+
+    mockSendMessage.mockImplementation((_text, callback) => {
+      capturedCallback = callback;
+      return { done: new Promise<void>(() => {}) };
+    });
+
+    mockGetContentBlockStartType.mockReturnValue({
+      blockType: "thinking",
+    });
+
+    const request = createRequest({ message: "Hello" });
+    const response = await POST(request);
+
+    capturedCallback!({
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        content_block: { type: "thinking" },
+      },
+    });
+    capturedCallback!({ type: "result" });
+
+    const output = await readStream(response);
+    expect(output).toContain('"type":"processing_state"');
+    expect(output).toContain('"state":"thinking"');
     expect(output).toContain('"type":"result"');
   });
 

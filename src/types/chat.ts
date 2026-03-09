@@ -1,5 +1,7 @@
 type MessageRole = "user" | "assistant";
 
+export type ProcessingStateEventType = "thinking" | "tool_use" | "text";
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -10,6 +12,11 @@ export type SSEChunk =
   | { type: "text_delta"; text: string }
   | { type: "result" }
   | { type: "error"; error: string }
+  | {
+      type: "processing_state";
+      state: ProcessingStateEventType;
+      toolName?: string;
+    }
   | {
       type: "permission_request";
       requestId: string;
@@ -71,3 +78,9 @@ export interface PermissionResponseBody {
   alwaysAllow?: boolean;
   message?: string;
 }
+
+export type ProcessingState =
+  | { type: "processing" }
+  | { type: "thinking" }
+  | { type: "tool_use"; toolName: string }
+  | null;

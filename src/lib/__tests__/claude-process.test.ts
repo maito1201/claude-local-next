@@ -7,12 +7,15 @@ jest.mock("child_process", () => ({
 import { spawn } from "child_process";
 import {
   buildStdinMessage,
-  isTextDelta,
-  isResultEvent,
-  isPermissionRequest,
   respondToPermission,
   sendMessage,
 } from "../claude-process";
+import {
+  isTextDelta,
+  getContentBlockStartType,
+  isResultEvent,
+  isPermissionRequest,
+} from "../claude-events";
 
 const mockSpawn = spawn as jest.MockedFunction<typeof spawn>;
 
@@ -103,6 +106,83 @@ describe("isTextDelta", () => {
     };
 
     expect(isTextDelta(event)).toBe(false);
+  });
+});
+
+describe("getContentBlockStartType", () => {
+  test("should return thinking blockType for content_block_start thinking event", () => {
+    const event = {
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        content_block: { type: "thinking" },
+      },
+    };
+
+    expect(getContentBlockStartType(event)).toEqual({ blockType: "thinking" });
+  });
+
+  test("should return tool_use blockType with toolName", () => {
+    const event = {
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        content_block: { type: "tool_use", name: "Bash" },
+      },
+    };
+
+    expect(getContentBlockStartType(event)).toEqual({
+      blockType: "tool_use",
+      toolName: "Bash",
+    });
+  });
+
+  test("should return null for tool_use content block without tool name", () => {
+    const event = {
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        content_block: { type: "tool_use" },
+      },
+    };
+
+    expect(getContentBlockStartType(event)).toBeNull();
+  });
+
+  test("should return text blockType for text content block start", () => {
+    const event = {
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        content_block: { type: "text" },
+      },
+    };
+
+    expect(getContentBlockStartType(event)).toEqual({ blockType: "text" });
+  });
+
+  test("should return null for non content_block_start events", () => {
+    const event = {
+      type: "stream_event",
+      event: {
+        type: "content_block_delta",
+        delta: { type: "thinking_delta", text: "..." },
+      },
+    };
+
+    expect(getContentBlockStartType(event)).toBeNull();
+  });
+
+  test("should return null for unsupported content block type", () => {
+    const event = {
+      type: "stream_event",
+      event: {
+        type: "content_block_start",
+        content_block: { type: "image" },
+      },
+    };
+
+    expect(getContentBlockStartType(event)).toBeNull();
   });
 });
 

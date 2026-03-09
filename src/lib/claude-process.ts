@@ -4,6 +4,7 @@ import type {
   ClaudeControlResponse,
   ControlResponseBehavior,
 } from "@/types/chat";
+import { isResultEvent } from "@/lib/claude-events";
 
 const CLAUDE_CLI_PATH =
   process.env.CLAUDE_CLI_PATH ?? "/Users/ito_masahiko/.local/bin/claude";
@@ -177,14 +178,6 @@ function handleControlRequest(
   writeControlResponse(state, request.request_id, null);
 }
 
-export function isPermissionRequest(
-  parsed: Record<string, unknown>
-): boolean {
-  if (parsed.type !== "control_request") return false;
-  const request = parsed.request as Record<string, unknown> | undefined;
-  return request?.subtype === "can_use_tool";
-}
-
 export function respondToPermission(
   requestId: string,
   allow: boolean,
@@ -243,23 +236,6 @@ export function buildStdinMessage(text: string): ClaudeStdinMessage {
     },
     parent_tool_use_id: null,
   };
-}
-
-export function isTextDelta(
-  parsed: Record<string, unknown>
-): parsed is { type: "stream_event"; event: { delta: { type: "text_delta"; text: string } } } {
-  if (parsed.type !== "stream_event") return false;
-  const event = parsed.event as Record<string, unknown> | undefined;
-  if (!event) return false;
-  const delta = event.delta as Record<string, unknown> | undefined;
-  if (!delta) return false;
-  return delta.type === "text_delta" && typeof delta.text === "string";
-}
-
-export function isResultEvent(
-  parsed: Record<string, unknown>
-): boolean {
-  return parsed.type === "result";
 }
 
 export function sendMessage(

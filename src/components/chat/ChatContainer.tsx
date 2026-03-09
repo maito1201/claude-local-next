@@ -5,21 +5,22 @@ import { MessageList } from "./MessageList";
 import { MessageInput } from "./MessageInput";
 import { TtsSettingsPanel } from "./TtsSettingsPanel";
 import { PermissionDialog } from "./PermissionDialog";
-import { parseSSELines } from "@/lib/sse-reader";
-import { extractSentences } from "@/lib/split-text";
 import { useSpeechRecognition } from "@/hooks/useSpeechRecognition";
 import { useTts } from "@/hooks/useTts";
 import { usePermission } from "@/hooks/usePermission";
-import type { ChatMessage } from "@/types/chat";
+import { useSSEStreamReader } from "@/hooks/useSSEStreamReader";
+import type { ChatMessage, ProcessingState } from "@/types/chat";
 
 const CHAT_API_ENDPOINT = "/api/chat";
 
 export function ChatContainer() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const assistantMessageIdRef = useRef<string | null>(null);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const ttsEnabledRef = useRef(false);
   const [ttsSettingsOpen, setTtsSettingsOpen] = useState(false);
+  const [processingState, setProcessingState] = useState<ProcessingState>(null);
   const { pendingPermission, setPendingPermission, handlePermissionResponse } =
     usePermission();
 
@@ -40,8 +41,10 @@ export function ChatContainer() {
       role: "assistant",
       content: "",
     };
+    assistantMessageIdRef.current = assistantId;
 
     setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    setProcessingState({ type: "processing" });
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -69,7 +72,6 @@ export function ChatContainer() {
 
       const fullText = await readSSEStream(
         response.body,
-        assistantId,
         shouldStream
       );
 
@@ -88,6 +90,7 @@ export function ChatContainer() {
 
       const errorText =
         err instanceof Error ? err.message : "Unknown error";
+      setProcessingState(null);
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
@@ -99,8 +102,11 @@ export function ChatContainer() {
       abortControllerRef.current = null;
       // AbortError means a new request replaced this one; that request handles voice restart
       // TTS再生中は音声認識を再開しない（onTtsEnd で再開する）
-      if (!controller.signal.aborted && !ttsEnabledRef.current) {
-        resumeVoice();
+      if (!controller.signal.aborted) {
+        setProcessingState(null);
+        if (!ttsEnabledRef.current) {
+          resumeVoice();
+        }
       }
     }
   }, []);
@@ -144,6 +150,13 @@ export function ChatContainer() {
     }
   }, [voiceMode, enableVoiceMode, disableVoiceMode]);
 
+  useEffect(() => {
+    if (!voiceError || !voiceMode) {
+      return;
+    }
+    disableVoiceMode();
+  }, [voiceError, voiceMode, disableVoiceMode]);
+
   const toggleTts = useCallback(() => {
     const next = !ttsEnabledRef.current;
     ttsEnabledRef.current = next;
@@ -152,84 +165,40 @@ export function ChatContainer() {
       stopTts();
     }
   }, [stopTts]);
-
-  async function readSSEStream(
-    body: ReadableStream<Uint8Array>,
-    assistantId: string,
-    streamToTts: boolean
-  ): Promise<string> {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let fullText = "";
-    // Buffer for sentence extraction (streaming TTS)
-    let sentenceBuffer = "";
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const { chunks, remaining } = parseSSELines(buffer);
-      buffer = remaining;
-
-      for (const chunk of chunks) {
-        if (chunk.type === "permission_request") {
-          setPendingPermission({
-            requestId: chunk.requestId,
-            toolName: chunk.toolName,
-            input: chunk.input,
-            description: chunk.description,
-          });
-        }
-
-        if (chunk.type === "text_delta") {
-          const deltaText = chunk.text;
-          fullText += deltaText;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: m.content + deltaText }
-                : m
-            )
-          );
-
-          // Streaming TTS: extract complete sentences and enqueue immediately
-          if (streamToTts) {
-            sentenceBuffer += deltaText;
-            const { sentences, remaining: sentenceRemaining } =
-              extractSentences(sentenceBuffer);
-            sentenceBuffer = sentenceRemaining;
-
-            for (const sentence of sentences) {
-              enqueueTts(sentence);
-            }
-          }
-        }
-
-        if (chunk.type === "error") {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: `エラー: ${chunk.error}` }
-                : m
-            )
-          );
-        }
+  const updateAssistantMessage = useCallback(
+    (updater: (currentContent: string) => string) => {
+      const assistantId = assistantMessageIdRef.current;
+      if (!assistantId) {
+        return;
       }
-    }
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId ? { ...m, content: updater(m.content) } : m
+        )
+      );
+    },
+    []
+  );
 
-    // Flush remaining sentence buffer to TTS
-    if (streamToTts && sentenceBuffer.trim()) {
-      enqueueTts(sentenceBuffer.trim());
-    }
-
-    return fullText;
-  }
+  const { readSSEStream } = useSSEStreamReader({
+    onPermissionRequest: setPendingPermission,
+    onTextDelta: (deltaText) => {
+      updateAssistantMessage((content) => content + deltaText);
+    },
+    onError: (errorText) => {
+      setProcessingState(null);
+      updateAssistantMessage(() => `エラー: ${errorText}`);
+    },
+    onProcessingState: setProcessingState,
+    onResult: () => {
+      setProcessingState(null);
+    },
+    onSentence: enqueueTts,
+  });
 
   return (
     <div className="flex flex-col h-screen max-w-3xl mx-auto">
-      <MessageList messages={messages} />
+      <MessageList messages={messages} processingState={processingState} />
       {speakError && (
         <div className="px-4 py-2 bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm">
           {speakError}

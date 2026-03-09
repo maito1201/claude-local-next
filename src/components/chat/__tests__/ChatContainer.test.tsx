@@ -9,6 +9,7 @@ const mockSuspend = jest.fn();
 const mockResume = jest.fn();
 let mockIsSupported = true;
 let mockVoiceMode = false;
+let mockVoiceError = "";
 let capturedOnResult: ((text: string) => void) | null = null;
 
 jest.mock("@/hooks/useSpeechRecognition", () => ({
@@ -23,7 +24,7 @@ jest.mock("@/hooks/useSpeechRecognition", () => ({
       isListening: false,
       isSupported: mockIsSupported,
       transcript: "",
-      error: "",
+      error: mockVoiceError,
     };
   },
 }));
@@ -57,7 +58,8 @@ jest.mock("@/hooks/useTts", () => ({
 }));
 
 function createMockReader(
-  chunks: string[]
+  chunks: string[],
+  chunkDelayMs = 0
 ): ReadableStreamDefaultReader<Uint8Array> {
   const encoder = new TextEncoder();
   let index = 0;
@@ -66,6 +68,9 @@ function createMockReader(
     read: async () => {
       if (index >= chunks.length) {
         return { done: true as const, value: undefined };
+      }
+      if (chunkDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
       }
       return {
         done: false as const,
@@ -80,9 +85,10 @@ function createMockReader(
 
 function createMockResponse(
   sseData: string[],
-  status = 200
+  status = 200,
+  chunkDelayMs = 0
 ): Response {
-  const reader = createMockReader(sseData);
+  const reader = createMockReader(sseData, chunkDelayMs);
 
   return {
     ok: status >= 200 && status < 300,
@@ -111,6 +117,7 @@ describe("ChatContainer", () => {
     mockIsSupported = true;
     mockIsTtsSupported = true;
     mockVoiceMode = false;
+    mockVoiceError = "";
     capturedOnResult = null;
     capturedOnEnd = null;
   });
@@ -210,6 +217,94 @@ describe("ChatContainer", () => {
     });
   });
 
+  test("should show thinking indicator and hide it after result", async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValue(
+      createMockResponse(
+        [
+          'data: {"type":"processing_state","state":"thinking"}\n\n',
+          'data: {"type":"result"}\n\n',
+        ],
+        200,
+        20
+      )
+    );
+
+    render(<ChatContainer />);
+
+    await user.type(
+      screen.getByPlaceholderText("メッセージを入力..."),
+      "Hello"
+    );
+    await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Thinking...")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Thinking...")).not.toBeInTheDocument();
+    });
+  });
+
+  test("should show tool_use indicator and hide it after result", async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValue(
+      createMockResponse(
+        [
+          'data: {"type":"processing_state","state":"tool_use","toolName":"Bash"}\n\n',
+          'data: {"type":"result"}\n\n',
+        ],
+        200,
+        20
+      )
+    );
+
+    render(<ChatContainer />);
+
+    await user.type(
+      screen.getByPlaceholderText("メッセージを入力..."),
+      "Hello"
+    );
+    await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Using tool: Bash...")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Using tool: Bash...")).not.toBeInTheDocument();
+    });
+  });
+
+  test("should hide processing indicator when SSE error arrives", async () => {
+    const user = userEvent.setup();
+    mockFetch.mockResolvedValue(
+      createMockResponse(
+        [
+          'data: {"type":"processing_state","state":"thinking"}\n\n',
+          'data: {"type":"error","error":"Something went wrong"}\n\n',
+        ],
+        200,
+        20
+      )
+    );
+
+    render(<ChatContainer />);
+
+    await user.type(
+      screen.getByPlaceholderText("メッセージを入力..."),
+      "Hello"
+    );
+    await user.click(screen.getByRole("button", { name: "送信 (Shift+ENTER)" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Thinking...")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText("Thinking...")).not.toBeInTheDocument();
+      expect(screen.getByText(/エラー: Something went wrong/)).toBeInTheDocument();
+    });
+  });
+
   test("should abort previous request when sending new message", async () => {
     const user = userEvent.setup();
     const abortSignals: AbortSignal[] = [];
@@ -304,6 +399,18 @@ describe("ChatContainer", () => {
     );
 
     expect(mockEnableVoiceMode).toHaveBeenCalledTimes(1);
+  });
+
+  test("should disable voice mode when voiceError is present", async () => {
+    mockIsSupported = true;
+    mockVoiceMode = true;
+    mockVoiceError = "network";
+
+    render(<ChatContainer />);
+
+    await waitFor(() => {
+      expect(mockDisableVoiceMode).toHaveBeenCalledTimes(1);
+    });
   });
 
   test("should call suspend on voice when sending message", async () => {
