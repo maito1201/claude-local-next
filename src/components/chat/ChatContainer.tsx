@@ -136,13 +136,6 @@ export function ChatContainer() {
     refetchSpeakers,
   } = useTts({ onEnd: onTtsEnd });
 
-  // voiceError時にvoiceModeをリセット
-  useEffect(() => {
-    if (voiceError) {
-      disableVoiceMode();
-    }
-  }, [voiceError, disableVoiceMode]);
-
   const toggleVoiceMode = useCallback(() => {
     if (voiceMode) {
       disableVoiceMode();
