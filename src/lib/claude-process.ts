@@ -7,7 +7,7 @@ import type {
 import { isResultEvent } from "@/lib/claude-events";
 
 const CLAUDE_CLI_PATH =
-  process.env.CLAUDE_CLI_PATH ?? "/Users/ito_masahiko/.local/bin/claude";
+  process.env.CLAUDE_CLI_PATH ?? "claude";
 
 const CLAUDE_CLI_ARGS = [
   "--output-format",
